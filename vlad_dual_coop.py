@@ -31,9 +31,9 @@ class NetVLAD(nn.Module):
             residual *= soft_assign[:,C:C+1,:].unsqueeze(2)
             vlad[:,C:C+1,:] = residual.sum(dim=-1)
 
-        vlad = F.normalize(vlad, p=2, dim=2)
+#         vlad = F.normalize(vlad, p=2, dim=2)
         vlad = vlad.view(N, -1)
-        vlad = F.normalize(vlad, p=2, dim=1)
+#         vlad = F.normalize(vlad, p=2, dim=1)
 
         return vlad
 
@@ -160,12 +160,12 @@ class AttentionConv(nn.Module):
         netvlad = netvlad.to(x.device)
         out_vlad = netvlad(x)
         
-        
-        out_vlad_reshaped = out_vlad.view(-1, C)
-        projected_out_vlad = self.linear_projection(out_vlad_reshaped)
+        out_vlad = out_vlad.view(out_vlad.shape[0],num_clusters, C)
+        out_vlad = out_vlad.permute(1,0,2)
+        projected_out_vlad = self.linear_projection(out_vlad)
         projected_out_vlad = projected_out_vlad.view(num_clusters, N, 512)
         projected_out_vlad = projected_out_vlad.permute(1,2,0)
-
+#         print("projected_out_vlad: ", projected_out_vlad.shape)
         
         if h * w + 1 != self.positional_embedding.shape[0]:
             w_spacial = self.positional_embedding[1:].permute(1, 0).reshape(1, -1, self.spec_dim, self.spec_dim)
@@ -211,14 +211,15 @@ class AttentionConv(nn.Module):
 #         print('X SHAPE',x.shape) #[197, 32, 2048]
         
         
+#         print('out_vlad.shape', out_vlad.shape)
+#         x2 = F.linear(out_vlad, self.v_proj.weight, self.v_proj.bias)
+#         print("X2 SHAPE 1", x2.shape) #[197, 32, 2048]
         
-#         x2 = F.linear(x, self.v_proj.weight, self.v_proj.bias)
-# #         print("X2 SHAPE 1", x2.shape) #[197, 32, 2048]
 #         x2 = F.linear(x2, self.c_proj.weight, self.c_proj.bias)
-# #         print("X2 SHAPE 2",x2.shape) #[197, 32, 512]
+#         print("X2 SHAPE 2",x2.shape) #[197, 32, 512]
 #         # x2 dimension is [50, 32, 1024]
 #         x2 = x2.permute(1, 2, 0)
-# #         print("X2 SHAPE 3",x2.shape) #[32, 512, 197]
+#         print("X2 SHAPE 3",x2.shape) #[32, 512, 197]
 #         print(OPEN)
 #         return x2, attn_weights[:, :1]
         return projected_out_vlad, attn_weights[:, :1]
