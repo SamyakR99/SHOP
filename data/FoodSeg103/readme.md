@@ -1,5 +1,7 @@
 FoodSeg 103 Classes
 
+Add dataset_builder.py and FoodSeg103.py in SHOP/DualCoOp/dataloaders/
+
 Page 11: https://arxiv.org/pdf/2105.05409.pdf
 
 Class Names:
