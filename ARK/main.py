@@ -14,18 +14,22 @@ import shutil
 
 from sklearn.metrics import accuracy_score
 from pdb import set_trace as breakpoint
-
-
+from utils.helper import mAP
+from utils.asymmetric_loss import AsymmetricLoss, AsymmetricLoss2, AsymmetricLoss3
 from loads.foodseg103 import foodseg103
+
+from torch.optim import SGD
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, CosineAnnealingLR
+
 
 def build_dataset(data_root, data_split):
     print(' -------------------- Building Dataset ----------------------')
     return foodseg103(data_root, data_split, img_size = 224)
 
 data_root = '/home/samyakr2/food/FoodSeg103/Images'
-train_split = "train_seg"
-val_split = "test_seg"
-test_split = "test_seg"
+train_split = "trainval"
+val_split = "test"
+test_split = "test"
 
 train_dataset = build_dataset(data_root, train_split)
 val_dataset = build_dataset(data_root, val_split)
@@ -45,7 +49,10 @@ test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=100,
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 clip_model, preprocess = clip.load('RN101', device)
-# clip_model = clip_model#.float()
+clip_model.float()
+
+for param in clip_model.parameters():
+    param.requires_grad = False
 
 def get_features(dataloader):
     all_features_batches = []
@@ -61,29 +68,29 @@ def get_features(dataloader):
 # train_features, train_labels, train_img_names = get_features(train_loader)
 # val_features, val_labels, val_img_names = get_features(test_loader)
 
-train_features_path = "/home/samyakr2/SHOP/ARK/storage/foodseg103_train_clip_features_res.pt"
-train_labels_path = '/home/samyakr2/SHOP/ARK/storage/foodseg103_train_clip_labels_res.pt'
-train_img_names_path = '/home/samyakr2/SHOP/ARK/storage/foodseg103_train_img_name_res.pt'
+# train_features_path = "/home/samyakr2/SHOP/ARK/storage/foodseg103_train_clip_features_res.pt"
+# train_labels_path = '/home/samyakr2/SHOP/ARK/storage/foodseg103_train_clip_labels_res.pt'
+# train_img_names_path = '/home/samyakr2/SHOP/ARK/storage/foodseg103_train_img_name_res.pt'
 
 # torch.save(train_features, train_features_path)
 # torch.save(train_labels, train_labels_path)
 # torch.save(train_img_names, train_img_names_path)
 
-val_features_path = "/home/samyakr2/SHOP/ARK/storage/foodseg103_val_clip_features_res.pt"
-val_labels_path = '/home/samyakr2/SHOP/ARK/storage/foodseg103_val_clip_labels_res.pt'
-val_img_names_path = '/home/samyakr2/SHOP/ARK/storage/foodseg103_val_img_name_res.pt'
+# val_features_path = "/home/samyakr2/SHOP/ARK/storage/foodseg103_val_clip_features_res.pt"
+# val_labels_path = '/home/samyakr2/SHOP/ARK/storage/foodseg103_val_clip_labels_res.pt'
+# val_img_names_path = '/home/samyakr2/SHOP/ARK/storage/foodseg103_val_img_name_res.pt'
 
 # torch.save(val_features, val_features_path)
 # torch.save(val_labels, val_labels_path)
 # torch.save(val_img_names, val_img_names_path)
 
-train_features = torch.load(train_features_path)
-train_labels = torch.load(train_labels_path)
-train_img_name = torch.load(train_img_names_path)
+# train_features = torch.load(train_features_path)
+# train_labels = torch.load(train_labels_path)
+# train_img_name = torch.load(train_img_names_path)
 
-val_features = torch.load(val_features_path)
-val_labels = torch.load(val_labels_path)
-val_img_name = torch.load(val_img_names_path)
+# val_features = torch.load(val_features_path)
+# val_labels = torch.load(val_labels_path)
+# val_img_name = torch.load(val_img_names_path)
 
 
 class clip_2fc(nn.Module):
@@ -94,11 +101,9 @@ class clip_2fc(nn.Module):
         #     nn.Linear(input_dim, hidden_dim)
         # )
         
-        self.fc1 = nn.Linear(input_dim, input_dim)
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(input_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc4 = nn.Linear(hidden_dim, output_dim)
+        self.fc2 = nn.Linear(hidden_dim, output_dim)
         
 
         self.softmax = nn.Softmax(dim=1)
@@ -110,32 +115,44 @@ class clip_2fc(nn.Module):
         out = self.relu(out)
         out = self.dropout(out)
         out = self.fc2(out)
-        out = self.relu(out)
-        out = self.dropout(out)
-        out = self.fc3(out)
-        out = self.relu(out)
-        # out = self.dropout(out)
-        out = self.fc4(out)
-
-        out = self.softmax(out)
+        
         return out
 
-input_size = train_features[0].size(1)  
+input_size = 512
 hidden_size = input_size // 2
 num_classes = 103 
 
+LR = 0.002
+MAX_EPOCH = 50
+LR_SCHEDULER = "cosine"
+WARMUP_EPOCH = 1
+WARMUP_TYPE = "constant"
+WARMUP_CONS_LR = 1e-5
+
 model = clip_2fc(input_size, hidden_size, num_classes).to(device)
-criterion = nn.CrossEntropyLoss()
+
+# criterion = nn.CrossEntropyLoss()
+criterion = AsymmetricLoss(3, 1)
 
 params_to_optimize = list(model.parameters())
-optimizer = torch.optim.Adam(params_to_optimize, lr=5e-4)  
+optimizer = SGD(params_to_optimize, lr=LR)
+if LR_SCHEDULER == "cosine":
+    if WARMUP_TYPE == "constant":
+        scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=WARMUP_EPOCH, T_mult=1)
+    else:
+        scheduler = CosineAnnealingLR(optimizer, T_max=MAX_EPOCH - WARMUP_EPOCH)
+else:
+    scheduler = None
+# scheduler = None
+
 
 best_loss = float('inf')
-num_epochs = 2000
+num_epochs = 300
+
 
 # import torch.optim.lr_scheduler as lr_scheduler
 # scheduler = lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)  
-def train_model(num_epochs, model, criterion, train_features, train_labels, device):
+def train_model(num_epochs, model, criterion, dataloader, device):
     best_loss = float('inf')
     for epoch in range(num_epochs):
         epoch_loss = 0.0
@@ -143,26 +160,30 @@ def train_model(num_epochs, model, criterion, train_features, train_labels, devi
         all_outputs = []
         all_labels = []
 
-        for features_batch, labels_batch in zip(train_features, train_labels):
-            # Flatten features batch
+        for (images, img_names), labels in dataloader:
+            features_batch = clip_model.encode_image(images.to(device))
+            features_batch = features_batch/features_batch.norm(dim =1, keepdim = True)
             features_batch = features_batch.view(features_batch.size(0), -1).to(torch.float32)
             # Convert labels to tensor
-            labels_tensor = labels_batch.type(torch.float32).to(device)#torch.tensor(labels_batch, dtype=torch.float32)#
+            labels_tensor = labels.type(torch.float32).to(device)#torch.tensor(labels_batch, dtype=torch.float32)#
             labels_tensor = labels_tensor.squeeze(dim=1)
             # Forward pass
             outputs = model(features_batch.to(device))
             
-            # breakpoint()
             loss = criterion(outputs, labels_tensor)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
-            if (epoch + 1) % 10 == 0:
-                    
-                outputs_np = outputs.argmax(dim=1).cpu().detach().numpy()
-                labels_np = labels_tensor.argmax(dim=1).cpu().detach().numpy()
+            if (epoch + 1) % 5 == 0:
+
+                # outputs_np = outputs.argmax(dim=1).cpu().detach().numpy()
+                # labels_np = labels_tensor.argmax(dim=1).cpu().detach().numpy()
                 
+                outputs_np = outputs.cpu().detach().numpy()
+                labels_np = labels_tensor.cpu().detach().numpy()
+                
+
                 all_outputs.append(outputs_np)
                 all_labels.append(labels_np)
 
@@ -171,58 +192,66 @@ def train_model(num_epochs, model, criterion, train_features, train_labels, devi
             best_loss = epoch_loss
             best_model_state_dict = model.state_dict()
 
-        if (epoch + 1) % 10 == 0:
+
+        if (epoch + 1) % 5 == 0:
             all_outputs = np.concatenate(all_outputs)
             all_labels = np.concatenate(all_labels)
-            acc = accuracy_score(all_labels, all_outputs)
-            print(f"accuracy_score: {acc}")
-            torch.save(best_model_state_dict, f"/home/samyakr2/SHOP/ARK/weights_storage/epoch_{epoch+1+1000}.pth")
-        # scheduler.step()
+            mAP_score = mAP(all_labels, all_outputs)
 
-# best_model_state_dict = torch.load("/home/samyakr2/SHOP/ARK/weights_storage/epoch_{}.pth".format(1000))
-# model.load_state_dict(best_model_state_dict)
-# train_model(num_epochs, model, criterion, train_features, train_labels, device)
+            # acc = accuracy_score(all_labels, all_outputs)
+            # print(f"accuracy_score: {acc}")
+            print('-'*25)
+            print('Mean Average Precision', mAP_score)
+            print('-'*25)
+            
+            torch.save(best_model_state_dict, f"/home/samyakr2/SHOP/ARK/weights_storage/epoch_{epoch+1+400}.pth")
+        if scheduler is not None:
+            scheduler.step(epoch)
+
+pretrained_weights = torch.load('/home/samyakr2/SHOP/ARK/weights_storage/epoch_400.pth')
+model.load_state_dict(pretrained_weights)
+
+train_model(num_epochs, model, criterion, train_loader, device)
 
 
-def test_model(model, features_batches, labels_batches, val_img_names, device):
+def test_model(model, dataloader, device):
     model.eval()  # Set the model to evaluation mode
     all_labels = []
     all_outputs = []
-    multilabel_dict = {}
+    # multilabel_dict = {}
     with torch.no_grad():  # Disable gradient computation
-        for features_batch, labels_batch, val_img_name in zip(features_batches, labels_batches, val_img_names):
+        for (images, img_names), labels in dataloader:
             # Move batch to device
-            breakpoint()
-
-            features_batch = features_batch.to(device)
-            labels_tensor = labels_batch.type(torch.float32).to(device)
-            labels_tensor = labels_tensor.squeeze(dim=1)
+            features_batch = clip_model.encode_image(images.to(device))
+            features_batch = features_batch/features_batch.norm(dim =1, keepdim = True)
             features_batch = features_batch.view(features_batch.size(0), -1).to(torch.float32)
-            outputs = model(features_batch)
-            for idy in range (len(val_img_name)):
-                multilabel_dict[val_img_name[idy]] = outputs[idy]
+
+            labels_tensor = labels.type(torch.float32).to(device)#torch.tensor(labels_batch, dtype=torch.float32)#
+            labels_tensor = labels_tensor.squeeze(dim=1)
+            
+            outputs = model(features_batch.to(device))
+            # for idy in range (len(val_img_name)):
+            #     multilabel_dict[val_img_name[idy]] = outputs[idy]
             # Convert outputs and labels to numpy arrays
-            outputs_np = outputs.argmax(dim=1).cpu().detach().numpy()
-            labels_np = labels_tensor.argmax(dim=1).cpu().detach().numpy()
+            outputs_np = outputs.cpu().detach().numpy()
+            labels_np = labels_tensor.cpu().detach().numpy()
 
             all_outputs.append(outputs_np)
             all_labels.append(labels_np)
     
-    torch.save(multilabel_dict, '/home/samyakr2/SHOP/ARK/output/multilabel_dict.pth')
-
     # Concatenate outputs and labels
     all_outputs = np.concatenate(all_outputs)
     all_labels = np.concatenate(all_labels)
     # Compute average precision score
-    acc = accuracy_score(all_labels, all_outputs)
-    print(f"accuracy_score: {acc}")
+    mAP_score = mAP(all_labels, all_outputs)
+    print('Mean Average Precision', mAP_score)
 
 # best_model_state_dict = torch.load("/home/samyakr2/SHOP/ARK/weights_storage/epoch_{}.pth".format(490))
 # model.load_state_dict(best_model_state_dict)
 # test_model(model, val_features, val_labels, val_img_name, device)
 
-# for i in range (10, 3001, 1000):
+# for i in range (200, 401, 2):
     
 #     best_model_state_dict = torch.load("/home/samyakr2/SHOP/ARK/weights_storage/epoch_{}.pth".format(i))
 #     model.load_state_dict(best_model_state_dict)
-#     test_model(model, val_features, val_labels, val_img_name,device)
+#     test_model(model,test_loader ,device)

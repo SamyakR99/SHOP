@@ -43,15 +43,14 @@ class foodseg103(data.Dataset):
         
         
         self.data_split = data_split
-        if data_split == 'trainval':
-            self.labels_lab = np.load('/home/samyakr2/food/FoodSeg103/train_labels.npy', allow_pickle=True).item()
+        if data_split == 'train_seg':
+            self.labels_lab = np.load('/home/samyakr2/food/FoodSeg103/Images/final_img_set/train_labels.npy', allow_pickle=True).item()
         
-        if data_split == 'test':
-            self.labels_lab = np.load('/home/samyakr2/food/FoodSeg103/test_labels.npy', allow_pickle=True).item()
-    
+        if data_split == 'test_seg':
+            self.labels_lab = np.load('/home/samyakr2/food/FoodSeg103/Images/final_img_set/test_labels.npy', allow_pickle=True).item()
+            
         
-        image_list_file = os.path.join('/home/samyakr2/food/FoodSeg103', 'ImageSets', '%s.txt' % data_split)
-
+        image_list_file = os.path.join('/home/samyakr2/food/FoodSeg103/Images/final_img_set/%s.txt' % data_split)
         
         with open(image_list_file) as f:
             image_list = f.readlines()
@@ -79,9 +78,9 @@ class foodseg103(data.Dataset):
         ])
         
         # self.masks_img_transform = mask_img_transform
-        if self.data_split == 'trainval':
+        if self.data_split == 'train_seg':
             self.transform = train_transform
-        elif self.data_split == 'test':
+        elif self.data_split == 'test_seg':
             self.transform = test_transform
         else:
             raise ValueError('data split = %s is not supported in Nus Wide' % self.data_split)
@@ -93,21 +92,17 @@ class foodseg103(data.Dataset):
 
     def __getitem__(self, index):
         
-        if self.data_split == 'trainval':
-            si = self.data_split[:-3]
-        else:
-            si = self.data_split
-        
-        img_path = os.path.join('/home/samyakr2/food/FoodSeg103', 'Images/img_dir/', si+'/', self.image_list[index])
+
+        img_path = os.path.join('/home/samyakr2/food/FoodSeg103/Images/final_img_set/',self.data_split[:-4], self.image_list[index])
         img = Image.open(img_path).convert('RGB')
-        label_vector = self.labels_lab[self.image_list[index][:-4]]      
-        targets = label_vector[1:].long()
+        
+        label_vector = torch.tensor(self.labels_lab[self.image_list[index][:-4]])      
+        targets = label_vector.float()
         target = targets[None, ]
         
         if self.transform is not None:
             img = self.transform(img)
 
         return (img, self.image_list[index]), target
-    
     def name(self):
         return 'foodseg103'
